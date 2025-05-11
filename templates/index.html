@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <h2>Live Stream</h2>
+  <img src="/live" width="640">
+  <h2>Recorded Videos</h2>
+  <ul id="vid-list"></ul>
+
+  <script>
+    fetch("/recordings")
+      .then(res => res.json())
+      .then(data => {
+        let ul = document.getElementById("vid-list");
+        data.forEach(path => {
+          let li = document.createElement("li");
+          li.innerHTML = `<a href="/video?path=${encodeURIComponent(path)}">${path}</a>`;
+          ul.appendChild(li);
+        });
+      });
+  </script>
+</body>
+</html>
