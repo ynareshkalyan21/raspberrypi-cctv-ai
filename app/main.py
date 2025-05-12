@@ -4,9 +4,9 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse, HTMLResponse
 import cv2
 
-from app.recorder import record_loop
-from app.streamer import latest_frame, rtsp_reader
-from app.playback import list_recordings, get_video
+from recorder import record_loop
+from streamer import latest_frame, rtsp_reader
+from playback import list_recordings, get_video
 import uvicorn
 app = FastAPI()
 
