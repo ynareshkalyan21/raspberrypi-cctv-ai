@@ -1,4 +1,4 @@
-import cv2, threading
+import cv2
 from app.config import RTSP_URL
 
 latest_frame = None

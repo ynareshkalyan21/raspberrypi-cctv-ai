@@ -21,4 +21,3 @@ def record_loop():
             last_time = time.time()
 
         out.write(latest_frame)
-        time.sleep(1.0 / FPS)

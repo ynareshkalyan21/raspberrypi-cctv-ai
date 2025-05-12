@@ -1,9 +1,13 @@
+import threading
+
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse, HTMLResponse
 import cv2
-from app.streamer import latest_frame
-from app.playback import list_recordings, get_video
 
+from app.recorder import record_loop
+from app.streamer import latest_frame, rtsp_reader
+from app.playback import list_recordings, get_video
+import uvicorn
 app = FastAPI()
 
 @app.get("/", response_class=HTMLResponse)
@@ -26,3 +30,12 @@ def recordings():
 @app.get("/video")
 def video(path: str):
     return get_video(path)
+
+if __name__ == "__main__":
+    # Start threads
+    threading.Thread(target=rtsp_reader, daemon=True).start()
+    # threading.Thread(target=inference_loop, daemon=True).start()
+    threading.Thread(target=record_loop, daemon=True).start()
+
+    # Start API
+    uvicorn.run(app, host="0.0.0.0", port=8000)
