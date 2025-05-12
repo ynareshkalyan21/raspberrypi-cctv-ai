@@ -4,7 +4,7 @@ from app.config import RTSP_URL
 latest_frame = None
 
 def rtsp_reader():
-    print("starting RTSP reader")
+    print("starting RTSP reader", RTSP_URL)
     global latest_frame
     cap = cv2.VideoCapture(RTSP_URL)
     print("RTSP reader started")
