@@ -14,7 +14,7 @@ from datetime import datetime
 # ---------- CONFIG ---------- #
 from app.playback import list_recordings, get_video
 
-RTSP_URL = 'rtsp://admin:admin12345@192.168.1.64/Streaming/Channels/101/'
+RTSP_URL = 'rtsp://admin:admin12345@192.168.1.33/Streaming/Channels/101/'
 FPS = 10
 RECORD_INTERVAL = 60*10  # seconds
 
