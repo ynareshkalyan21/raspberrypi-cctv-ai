@@ -16,9 +16,9 @@ from app.playback import list_recordings, get_video
 
 RTSP_URL = 'rtsp://admin:admin12345@192.168.1.64/Streaming/Channels/101/'
 FPS = 10
-RECORD_INTERVAL = 30*10  # seconds
+RECORD_INTERVAL = 60*10  # seconds
 
-MODEL_PATH = 'yolov5s.onnx'
+MODEL_PATH = '/home/ai/Downloads/yolov5s.onnx'
 
 INFERENCE_MODEL_PATH = MODEL_PATH
 
