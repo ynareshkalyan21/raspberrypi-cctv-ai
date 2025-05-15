@@ -12,13 +12,10 @@ import onnxruntime as ort
 from datetime import datetime
 
 # ---------- CONFIG ---------- #
-from app.config import RECORD_DIR
+from config import RECORD_DIR, RTSP_URL,FPS,RECORD_INTERVAL,MODEL_PATH
 
-RTSP_URL = 'rtsp://admin:admin12345@192.168.1.33/Streaming/Channels/101/'
-FPS = 10
-RECORD_INTERVAL = 60*10  # seconds
+# RTSP_URL = 'rtsp://admin:admin12345@192.168.1.35/Streaming/Channels/101/'
 
-MODEL_PATH = '/home/ai/Downloads/yolov5s.onnx'
 
 INFERENCE_MODEL_PATH = MODEL_PATH
 
@@ -74,8 +71,11 @@ def rtsp_reader():
     while True:
         ret, frame = cap.read()
         if not ret:
+            print("❌ Failed to read frame from RTSP stream.")
             continue
         with frame_lock:
+            if latest_raw_frame is None:
+                print("setting  first frame")
             latest_raw_frame = frame.copy()
 
 # ---------- Thread 2: Inference Loop ---------- #
@@ -117,6 +117,7 @@ def record_stream():
         current_time = time.time()
         if out is None or (current_time - last_rotation_time) >= RECORD_INTERVAL:
             if out is not None:
+                print(f"** Recording stopped, saving file...{out_path}")
                 out.release()
 
             folder_path = f"recordings/{datetime.now().strftime('%Y-%m-%d')}"
@@ -139,6 +140,7 @@ def generate_frames():
     while True:
         with lock:
             if latest_frame is None:
+                print("/live::generate_frames::No frame available")
                 continue
             frame = latest_frame.copy()
 
