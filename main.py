@@ -16,7 +16,9 @@ from config import RECORD_DIR, RTSP_URL,FPS,RECORD_INTERVAL,MODEL_PATH
 
 # RTSP_URL = 'rtsp://admin:admin12345@192.168.1.35/Streaming/Channels/101/'
 
-
+sess_options = ort.SessionOptions()
+sess_options.intra_op_num_threads = 1
+sess_options.inter_op_num_threads = 1
 INFERENCE_MODEL_PATH = MODEL_PATH
 
 # ---------- Globals ---------- #
