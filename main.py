@@ -97,8 +97,6 @@ def inference_loop():
         with lock:
             latest_frame = frame.copy()
 
-        time.sleep(1.0 / FPS)
-
 # ---------- Thread 3: Recording ---------- #
 def record_stream():
     global latest_raw_frame
