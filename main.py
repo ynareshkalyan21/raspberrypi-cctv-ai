@@ -89,6 +89,7 @@ def inference_loop():
         with frame_lock:
             if latest_raw_frame is None:
                 print(f"** No frame available for inference, skipping...**")
+                time.sleep(2)
                 continue
             frame1 = latest_raw_frame.copy()
         start_time = time.time()
@@ -147,6 +148,7 @@ def generate_frames():
         with lock:
             if latest_frame is None:
                 print("/live::generate_frames::No frame available")
+                time.sleep(2)
                 continue
             frame_api = latest_frame.copy()
 
