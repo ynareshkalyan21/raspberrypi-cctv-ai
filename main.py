@@ -85,6 +85,7 @@ def rtsp_reader():
 # ---------- Thread 2: Inference Loop ---------- #
 def inference_loop():
     global latest_frame
+    ic = 0
     while True:
         with frame_lock:
             if latest_raw_frame is None:
@@ -100,6 +101,8 @@ def inference_loop():
         duration = time.time() - start_time
         #add durarion to frame
         cv2.putText(frame1, f"Inference Time: {duration:.2f}s", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        ic += 1
+        print(f" ic:{ic} Inference Time: {duration:.2f}s")
         with lock:
             latest_frame = frame1.copy()
 
@@ -156,6 +159,7 @@ def generate_frames():
         if not ret:
             print("/live::generate_frames::Failed to encode frame")
             continue
+        ccc += 1
         print(f"/stream::generate_frames::{ccc} frames sent")
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
