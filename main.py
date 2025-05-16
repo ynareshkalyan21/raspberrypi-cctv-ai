@@ -69,16 +69,18 @@ def draw_boxes(image, boxes, scores, class_ids):
 def rtsp_reader():
     global latest_raw_frame
     cap = cv2.VideoCapture(RTSP_URL)
-
+    cc = 0
     while True:
-        ret, frame = cap.read()
+        ret, frame_raw = cap.read()
         if not ret:
             print("❌ Failed to read frame from RTSP stream.")
             continue
         with frame_lock:
             if latest_raw_frame is None:
                 print("setting  first frame")
-            latest_raw_frame = frame.copy()
+            latest_raw_frame = frame_raw.copy()
+            cc +=1
+            print(f"RTSP Reader: {cc} frames read")
 
 # ---------- Thread 2: Inference Loop ---------- #
 def inference_loop():
@@ -86,18 +88,19 @@ def inference_loop():
     while True:
         with frame_lock:
             if latest_raw_frame is None:
+                print(f"** No frame available for inference, skipping...**")
                 continue
-            frame = latest_raw_frame.copy()
+            frame1 = latest_raw_frame.copy()
         start_time = time.time()
-        inp = preprocess(frame)
+        inp = preprocess(frame1)
         outputs = session.run(None, {input_name: inp})
-        boxes, scores, class_ids = postprocess(outputs, frame)
-        frame = draw_boxes(frame, boxes, scores, class_ids)
+        boxes, scores, class_ids = postprocess(outputs, frame1)
+        frame1 = draw_boxes(frame1, boxes, scores, class_ids)
         duration = time.time() - start_time
         #add durarion to frame
-        cv2.putText(frame, f"Inference Time: {duration:.2f}s", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        cv2.putText(frame1, f"Inference Time: {duration:.2f}s", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         with lock:
-            latest_frame = frame.copy()
+            latest_frame = frame1.copy()
 
 # ---------- Thread 3: Recording ---------- #
 def record_stream():
@@ -112,9 +115,9 @@ def record_stream():
         with frame_lock:
             if latest_raw_frame is None:
                 continue
-            frame = latest_raw_frame
+            frame_recording = latest_raw_frame
             c += 1
-            print(c)
+            print(f"recording:{c}")
 
         current_time = time.time()
         if out is None or (current_time - last_rotation_time) >= RECORD_INTERVAL:
@@ -126,12 +129,12 @@ def record_stream():
             os.makedirs(folder_path, exist_ok=True)
             file_name = f"{datetime.now().strftime('%H-%M-%S')}.mp4"
             out_path = os.path.join(folder_path, file_name)
-            out = cv2.VideoWriter(out_path, fourcc, FPS, (frame.shape[1], frame.shape[0]))
+            out = cv2.VideoWriter(out_path, fourcc, FPS, (frame_recording.shape[1], frame_recording.shape[0]))
             print(f"Recording to {out_path}")
             last_rotation_time = current_time
             frame_count = 0
 
-        out.write(frame)
+        out.write(frame_recording)
         frame_count += 1
         time.sleep(1.0 / FPS)
 
@@ -139,16 +142,19 @@ def record_stream():
 app = FastAPI()
 
 def generate_frames():
+    ccc = 0
     while True:
         with lock:
             if latest_frame is None:
                 print("/live::generate_frames::No frame available")
                 continue
-            frame = latest_frame.copy()
+            frame_api = latest_frame.copy()
 
-        ret, jpeg = cv2.imencode('.jpg', frame)
+        ret, jpeg = cv2.imencode('.jpg', frame_api)
         if not ret:
+            print("/live::generate_frames::Failed to encode frame")
             continue
+        print(f"/stream::generate_frames::{ccc} frames sent")
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
 
