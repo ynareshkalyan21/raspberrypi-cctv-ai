@@ -28,7 +28,7 @@ frame_lock = threading.Lock()
 lock = threading.Lock()
 
 # ---------- Model Setup ---------- #
-session = ort.InferenceSession(INFERENCE_MODEL_PATH)
+session = ort.InferenceSession(INFERENCE_MODEL_PATH, providers=["CPUExecutionProvider"], sess_options=sess_options)
 input_name = session.get_inputs()[0].name
 
 # ---------- YOLOv8 Helper Functions ---------- #
