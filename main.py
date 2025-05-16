@@ -107,12 +107,14 @@ def record_stream():
     folder_path = None
     frame_count = 0
     last_rotation_time = time.time()
-
+    c = 0
     while True:
         with frame_lock:
             if latest_raw_frame is None:
                 continue
-            frame = latest_raw_frame.copy()
+            frame = latest_raw_frame
+            c += 1
+            print(c)
 
         current_time = time.time()
         if out is None or (current_time - last_rotation_time) >= RECORD_INTERVAL:
