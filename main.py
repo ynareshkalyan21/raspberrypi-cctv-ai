@@ -87,12 +87,12 @@ def inference_loop():
     global latest_frame
     ic = 0
     while True:
-        with frame_lock:
-            if latest_raw_frame is None:
-                print(f"** No frame available for inference, skipping...**")
-                time.sleep(2)
-                continue
-            frame1 = latest_raw_frame.copy()
+        # with frame_lock:
+        if latest_raw_frame is None:
+            print(f"** No frame available for inference, skipping...**")
+            time.sleep(2)
+            continue
+        frame1 = latest_raw_frame.copy()
         start_time = time.time()
         inp = preprocess(frame1)
         outputs = session.run(None, {input_name: inp})
@@ -116,12 +116,13 @@ def record_stream():
     last_rotation_time = time.time()
     c = 0
     while True:
-        with frame_lock:
-            if latest_raw_frame is None:
-                continue
-            frame_recording = latest_raw_frame
-            c += 1
-            print(f"recording:{c}")
+        # with frame_lock:
+        if latest_frame is None:
+            time.sleep(2)
+            continue
+        frame_recording = latest_frame
+        c += 1
+        print(f"recording:{c}")
 
         current_time = time.time()
         if out is None or (current_time - last_rotation_time) >= RECORD_INTERVAL:
