@@ -74,6 +74,7 @@ def rtsp_reader():
         ret, frame_raw = cap.read()
         if not ret:
             print("❌ Failed to read frame from RTSP stream.")
+            time.sleep(2)
             continue
         with frame_lock:
             if latest_raw_frame is None:
