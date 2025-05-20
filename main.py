@@ -81,7 +81,7 @@ def rtsp_reader():
                 print("setting  first frame")
             latest_raw_frame = frame_raw.copy()
             cc +=1
-            print(f"RTSP Reader: {cc} frames read")
+            # print(f"RTSP Reader: {cc} frames read")
 
 # ---------- Thread 2: Inference Loop ---------- #
 def inference_loop():
@@ -103,7 +103,7 @@ def inference_loop():
         #add durarion to frame
         cv2.putText(frame1, f"Inference Time: {duration:.2f}s", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         ic += 1
-        print(f" ic:{ic} Inference Time: {duration:.2f}s")
+        # print(f" ic:{ic} Inference Time: {duration:.2f}s")
         with lock:
             latest_frame = frame1.copy()
 
@@ -123,10 +123,10 @@ def record_stream():
             continue
         frame_recording = latest_frame
         c += 1
-        print(f"recording:{c}")
+        # print(f"recording:{c}")
 
         current_time = time.time()
-        if out is None or (current_time - last_rotation_time) >= RECORD_INTERVAL:
+        if out is None or frame_count >= 1000:
             if out is not None:
                 print(f"** Recording stopped, saving file...{out_path}")
                 out.release()
