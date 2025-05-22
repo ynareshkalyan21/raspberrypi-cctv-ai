@@ -1,0 +1,633 @@
+name: Add Video Labeling Dashboard
+
+on:
+  workflow_dispatch: # Manual trigger from the Actions tab
+
+jobs:
+  create-video-labeling-dashboard:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Create new branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b feature/video-labeling-dashboard
+
+      - name: Add dashboard files
+        run: |
+          mkdir -p src/components
+          mkdir -p public
+
+          cat > src/components/VideoFrameSelector.tsx << 'EOF'
+import React, { useRef, useState } from "react";
+
+type VideoFrameSelectorProps = {
+  onFramesExtracted: (frames: { image: string; timestamp: number }[]) => void;
+};
+
+const VideoFrameSelector: React.FC<VideoFrameSelectorProps> = ({
+  onFramesExtracted,
+}) => {
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [duration, setDuration] = useState(0);
+  const [start, setStart] = useState(0);
+  const [end, setEnd] = useState(0);
+  const [numFrames, setNumFrames] = useState(10);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const url = URL.createObjectURL(e.target.files[0]);
+      setVideoUrl(url);
+      setStart(0);
+      setEnd(0);
+    }
+  };
+
+  const handleLoadedMetadata = () => {
+    if (videoRef.current) {
+      setDuration(videoRef.current.duration);
+      setEnd(videoRef.current.duration);
+    }
+  };
+
+  const extractFrames = async () => {
+    if (!videoRef.current || !videoUrl) return;
+    const frames: { image: string; timestamp: number }[] = [];
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d")!;
+    videoRef.current.currentTime = start;
+    const step = (end - start) / (numFrames - 1);
+
+    for (let i = 0; i < numFrames; i++) {
+      const time = start + step * i;
+      await new Promise<void>((resolve) => {
+        videoRef.current!.currentTime = time;
+        videoRef.current!.onseeked = () => {
+          canvas.width = videoRef.current!.videoWidth;
+          canvas.height = videoRef.current!.videoHeight;
+          ctx.drawImage(
+            videoRef.current!,
+            0,
+            0,
+            canvas.width,
+            canvas.height
+          );
+          frames.push({ image: canvas.toDataURL(), timestamp: time });
+          resolve();
+        };
+      });
+    }
+    onFramesExtracted(frames);
+  };
+
+  return (
+    <div>
+      <h3>1. Upload and Select Video Range</h3>
+      <input type="file" accept="video/*" onChange={handleVideoUpload} />
+      {videoUrl && (
+        <div>
+          <video
+            src={videoUrl}
+            ref={videoRef}
+            controls
+            onLoadedMetadata={handleLoadedMetadata}
+            style={{ maxWidth: "100%", margin: "1em 0" }}
+          />
+          <div>
+            <label>
+              Start (s):{" "}
+              <input
+                type="number"
+                min={0}
+                max={duration}
+                value={start}
+                step={0.01}
+                onChange={(e) => setStart(Number(e.target.value))}
+              />
+            </label>
+            <label>
+              End (s):{" "}
+              <input
+                type="number"
+                min={start}
+                max={duration}
+                value={end}
+                step={0.01}
+                onChange={(e) => setEnd(Number(e.target.value))}
+              />
+            </label>
+            <label>
+              Frames:{" "}
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={numFrames}
+                onChange={(e) => setNumFrames(Number(e.target.value))}
+              />
+            </label>
+            <button onClick={extractFrames}>Extract Frames</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default VideoFrameSelector;
+EOF
+
+          cat > src/components/AnnotationCanvas.tsx << 'EOF'
+import React, { useRef, useState } from "react";
+
+export type AnnotationType = "rect" | "polygon";
+
+export interface AnnotationBase {
+  id: string;
+  type: AnnotationType;
+  label: string;
+}
+
+export interface RectAnnotation extends AnnotationBase {
+  type: "rect";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface PolygonAnnotation extends AnnotationBase {
+  type: "polygon";
+  points: { x: number; y: number }[];
+}
+
+export type Annotation = RectAnnotation | PolygonAnnotation;
+
+interface AnnotationCanvasProps {
+  image: string;
+  annotations: Annotation[];
+  setAnnotations: (a: Annotation[]) => void;
+  currentTool: AnnotationType;
+  currentLabel: string;
+}
+
+const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
+  image,
+  annotations,
+  setAnnotations,
+  currentTool,
+  currentLabel,
+}) => {
+  const [drawing, setDrawing] = useState(false);
+  const [startPt, setStartPt] = useState<{ x: number; y: number } | null>(null);
+  const [polyPoints, setPolyPoints] = useState<{ x: number; y: number }[]>([]);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  function handleMouseDown(e: React.MouseEvent) {
+    const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    if (currentTool === "rect") {
+      setStartPt({ x, y });
+      setDrawing(true);
+    } else if (currentTool === "polygon") {
+      setPolyPoints([...polyPoints, { x, y }]);
+      setDrawing(true);
+    }
+  }
+
+  function handleMouseMove(e: React.MouseEvent) {
+    if (!drawing || currentTool === "polygon") return;
+    drawCanvas(e);
+  }
+
+  function handleMouseUp(e: React.MouseEvent) {
+    if (!drawing) return;
+    const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    if (currentTool === "rect" && startPt) {
+      const newRect: RectAnnotation = {
+        id: Math.random().toString(36).slice(2),
+        type: "rect",
+        x: Math.min(startPt.x, x),
+        y: Math.min(startPt.y, y),
+        width: Math.abs(x - startPt.x),
+        height: Math.abs(y - startPt.y),
+        label: currentLabel,
+      };
+      setAnnotations([...annotations, newRect]);
+      setStartPt(null);
+      setDrawing(false);
+      redraw();
+    }
+  }
+
+  function handleCanvasClick(e: React.MouseEvent) {
+    if (currentTool === "polygon" && polyPoints.length > 2) {
+      if (e.detail === 2) {
+        const newPoly: PolygonAnnotation = {
+          id: Math.random().toString(36).slice(2),
+          type: "polygon",
+          points: polyPoints,
+          label: currentLabel,
+        };
+        setAnnotations([...annotations, newPoly]);
+        setPolyPoints([]);
+        setDrawing(false);
+        redraw();
+      }
+    }
+  }
+
+  function drawCanvas(e?: React.MouseEvent) {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d")!;
+    const img = new window.Image();
+    img.src = image;
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+      annotations.forEach((ann) => {
+        ctx.strokeStyle = "red";
+        ctx.lineWidth = 2;
+        if (ann.type === "rect") {
+          ctx.strokeRect(ann.x, ann.y, ann.width, ann.height);
+        } else if (ann.type === "polygon") {
+          ctx.beginPath();
+          ann.points.forEach((pt, i) =>
+            i === 0
+              ? ctx.moveTo(pt.x, pt.y)
+              : ctx.lineTo(pt.x, pt.y)
+          );
+          ctx.closePath();
+          ctx.stroke();
+        }
+      });
+
+      if (drawing && currentTool === "rect" && startPt && e) {
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        ctx.strokeStyle = "blue";
+        ctx.strokeRect(
+          Math.min(startPt.x, x),
+          Math.min(startPt.y, y),
+          Math.abs(x - startPt.x),
+          Math.abs(y - startPt.y)
+        );
+      }
+      if (drawing && currentTool === "polygon" && polyPoints.length) {
+        ctx.beginPath();
+        ctx.moveTo(polyPoints[0].x, polyPoints[0].y);
+        polyPoints.slice(1).forEach((pt) => ctx.lineTo(pt.x, pt.y));
+        ctx.strokeStyle = "blue";
+        ctx.stroke();
+      }
+    };
+  }
+
+  function redraw() {
+    setTimeout(() => drawCanvas(), 50);
+  }
+
+  React.useEffect(() => {
+    drawCanvas();
+  }, [image, annotations, drawing, polyPoints]);
+
+  return (
+    <div>
+      <canvas
+        ref={canvasRef}
+        width={640}
+        height={360}
+        style={{ border: "1px solid #888", cursor: "crosshair" }}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onClick={handleCanvasClick}
+      />
+      <div style={{ marginTop: 8 }}>
+        {currentTool === "polygon" && (
+          <button
+            onClick={() => {
+              if (polyPoints.length > 2) {
+                const newPoly: PolygonAnnotation = {
+                  id: Math.random().toString(36).slice(2),
+                  type: "polygon",
+                  points: polyPoints,
+                  label: currentLabel,
+                };
+                setAnnotations([...annotations, newPoly]);
+                setPolyPoints([]);
+                setDrawing(false);
+              }
+            }}
+          >
+            Finish Polygon
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default AnnotationCanvas;
+EOF
+
+          cat > src/components/LabelingDashboard.tsx << 'EOF'
+import React, { useState } from "react";
+import VideoFrameSelector from "./VideoFrameSelector";
+import AnnotationCanvas, { Annotation } from "./AnnotationCanvas";
+
+const LABELS = ["Person", "Car", "Dog", "Other"];
+
+const LabelingDashboard: React.FC = () => {
+  const [frames, setFrames] = useState<{ image: string; timestamp: number }[]>(
+    []
+  );
+  const [currentFrameIdx, setCurrentFrameIdx] = useState(0);
+  const [annotationsPerFrame, setAnnotationsPerFrame] = useState<
+    Annotation[][]
+  >([]);
+  const [currentTool, setCurrentTool] = useState<"rect" | "polygon">("rect");
+  const [currentLabel, setCurrentLabel] = useState<string>(LABELS[0]);
+
+  const handleFramesExtracted = (
+    newFrames: { image: string; timestamp: number }[]
+  ) => {
+    setFrames(newFrames);
+    setAnnotationsPerFrame(Array(newFrames.length).fill([]));
+    setCurrentFrameIdx(0);
+  };
+
+  const setFrameAnnotations = (a: Annotation[]) => {
+    setAnnotationsPerFrame((prev) =>
+      prev.map((ann, idx) => (idx === currentFrameIdx ? a : ann))
+    );
+  };
+
+  const exportCOCO = () => {
+    const images = frames.map((f, idx) => ({
+      id: idx + 1,
+      file_name: `frame_${idx + 1}.png`,
+      width: 640,
+      height: 360,
+    }));
+    let annId = 1;
+    const annotations = annotationsPerFrame.flatMap((anns, idx) =>
+      anns.map((ann) => {
+        if (ann.type === "rect") {
+          return {
+            id: annId++,
+            image_id: idx + 1,
+            category_id: LABELS.indexOf(ann.label) + 1,
+            bbox: [ann.x, ann.y, ann.width, ann.height],
+            area: ann.width * ann.height,
+            segmentation: [],
+          };
+        } else if (ann.type === "polygon") {
+          return {
+            id: annId++,
+            image_id: idx + 1,
+            category_id: LABELS.indexOf(ann.label) + 1,
+            bbox: [],
+            area: 0,
+            segmentation: [
+              ann.points.flatMap((pt) => [pt.x, pt.y]),
+            ],
+          };
+        }
+        return null;
+      })
+    );
+    const categories = LABELS.map((l, i) => ({
+      id: i + 1,
+      name: l,
+      supercategory: "object",
+    }));
+    const coco = { images, annotations, categories };
+    const blob = new Blob([JSON.stringify(coco)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "annotations_coco.json";
+    a.click();
+  };
+
+  return (
+    <div style={{ display: "flex", height: "100vh" }}>
+      <div style={{ width: 200, background: "#f8f8f8", padding: 12 }}>
+        <h4>Frames</h4>
+        <div style={{ maxHeight: 300, overflowY: "auto" }}>
+          {frames.map((f, idx) => (
+            <div
+              key={idx}
+              style={{
+                border:
+                  idx === currentFrameIdx ? "2px solid #2196f3" : "1px solid #ddd",
+                marginBottom: 4,
+                cursor: "pointer",
+              }}
+              onClick={() => setCurrentFrameIdx(idx)}
+            >
+              <img
+                src={f.image}
+                alt={`frame${idx + 1}`}
+                style={{ width: "100%" }}
+              />
+              <div style={{ fontSize: 10 }}>{f.timestamp.toFixed(2)}s</div>
+            </div>
+          ))}
+        </div>
+        <button style={{ marginTop: 16 }} onClick={exportCOCO}>
+          Export COCO
+        </button>
+      </div>
+      <div style={{ flex: 1, padding: 20 }}>
+        <VideoFrameSelector onFramesExtracted={handleFramesExtracted} />
+        {frames.length > 0 && (
+          <div>
+            <div style={{ margin: "8px 0" }}>
+              <span>Label:</span>
+              <select
+                value={currentLabel}
+                onChange={(e) => setCurrentLabel(e.target.value)}
+              >
+                {LABELS.map((l) => (
+                  <option key={l} value={l}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+              <span style={{ marginLeft: 16 }}>Tool:</span>
+              <select
+                value={currentTool}
+                onChange={(e) =>
+                  setCurrentTool(e.target.value as "rect" | "polygon")
+                }
+              >
+                <option value="rect">Rectangle</option>
+                <option value="polygon">Polygon</option>
+              </select>
+            </div>
+            <AnnotationCanvas
+              image={frames[currentFrameIdx].image}
+              annotations={annotationsPerFrame[currentFrameIdx] || []}
+              setAnnotations={setFrameAnnotations}
+              currentTool={currentTool}
+              currentLabel={currentLabel}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default LabelingDashboard;
+EOF
+
+          cat > src/App.tsx << 'EOF'
+import React from "react";
+import LabelingDashboard from "./components/LabelingDashboard";
+
+const App: React.FC = () => {
+  return (
+    <div>
+      <h1 style={{ textAlign: "center" }}>Video Object Detection Labeling Tool</h1>
+      <LabelingDashboard />
+    </div>
+  );
+};
+
+export default App;
+EOF
+
+          cat > src/index.tsx << 'EOF'
+import React from "react";
+import ReactDOM from "react-dom/client";
+import App from "./App";
+
+const root = ReactDOM.createRoot(
+  document.getElementById("root") as HTMLElement
+);
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+EOF
+
+          cat > tsconfig.json << 'EOF'
+{
+  "compilerOptions": {
+    "target": "es6",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "noFallthroughCasesInSwitch": true,
+    "module": "esnext",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx"
+  },
+  "include": ["src"]
+}
+EOF
+
+          cat > package.json << 'EOF'
+{
+  "name": "video-labeling-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "typescript": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.0.0",
+    "@types/react-dom": "^18.0.0"
+  }
+}
+EOF
+
+          cat > public/index.html << 'EOF'
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Video Object Detection Labeling Tool</title>
+    <meta name="viewport" content="width=800, initial-scale=1" />
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
+EOF
+
+      - name: Commit and push changes
+        run: |
+          git add .
+          git commit -m "Add video labeling dashboard with frame extraction and annotation"
+          git push origin feature/video-labeling-dashboard
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: "Add video labeling dashboard with frame extraction and annotation"
+          body: |
+            ## Summary
+
+            This PR introduces a complete video labeling dashboard, enabling users to:
+            - Upload a video
+            - Select a time range via a timeline slider
+            - Choose number of frames to extract from the selected range
+            - Annotate extracted frames with rectangles or polygons
+            - Assign labels to objects
+            - Export annotations in COCO format
+
+            ### Features
+            - VideoFrameSelector: Upload video, select time range, and extract frames.
+            - AnnotationCanvas: Annotate with rectangles or polygons.
+            - LabelingDashboard: Frame navigation, annotation management, label selection, and export.
+            - Project setup files: tsconfig.json, package.json, and public/index.html.
+
+            > Note: You can further extend with mask annotation or YOLO export as needed.
+
+            ### Files Added
+            - src/components/VideoFrameSelector.tsx
+            - src/components/AnnotationCanvas.tsx
+            - src/components/LabelingDashboard.tsx
+            - src/App.tsx
+            - src/index.tsx
+            - tsconfig.json
+            - package.json
+            - public/index.html
+
+            ---
+            Please review and let me know if you need adjustments or enhancements!
+          branch: feature/video-labeling-dashboard
+          base: main
