@@ -1,7 +1,7 @@
 name: Add Video Labeling Dashboard
 
 on:
-  workflow_dispatch: # Manual trigger from the Actions tab
+  workflow_dispatch: # Allows you to run this workflow manually from the Actions tab
 
 jobs:
   create-video-labeling-dashboard:
@@ -629,5 +629,5 @@ EOF
 
             ---
             Please review and let me know if you need adjustments or enhancements!
-          branch: feature/video-labeling-dashboard
+          branch: feature-video-labeling-dashboard
           base: main
