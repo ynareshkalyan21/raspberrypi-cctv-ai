@@ -160,7 +160,7 @@ def monitor_street_light(frame, roi):
                 STREET_LIGHT_OFF_AT = datetime.now()  # Record the time when light turned OFF
                 print(f"🚨 NOTIFICATION: Street Light turned OFF! (Intensity: {current_intensity:.2f})")
                 speak("Corrent Vellipoyindi")
-                time.sleep(60)
+                time.sleep(5)
                 # Here you would integrate with a mobile notification service
         # Check for light turning ON
         elif current_intensity > light_on_threshold:
@@ -187,9 +187,10 @@ def monitor_street_light(frame, roi):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)  # Blue text
     if street_light_status == "OFF":
         duration_in_min = (datetime.now() - STREET_LIGHT_OFF_AT).total_seconds() / 60
+        duration_in_min = int(duration_in_min)
 
         # Draw a red circle if the light is OFF
-        if (datetime.now() - STREET_LIGHT_OFF_AT).total_seconds() < 10*60:
+        if (datetime.now() - STREET_LIGHT_OFF_AT).total_seconds() < 3*60:
             speak(f" {duration_in_min} nimishalu ayyindi")
             speak(f"Corrent Vellipoyi")
             time.sleep(10)
