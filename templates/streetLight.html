@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RTSP Stream with AI Inference</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-900 flex flex-col items-center p-4">
+    <div class="container mx-auto p-6 bg-white shadow-lg rounded-lg">
+        <h1 class="text-3xl font-bold text-center mb-6 text-blue-700">Live Stream with AI Inference & Street Light Monitor</h1>
+
+        <div class="flex flex-col md:flex-row gap-6 mb-8">
+            <div class="flex-1 bg-gray-800 rounded-lg overflow-hidden shadow-xl">
+                <h2 class="text-xl font-semibold text-white p-4 bg-gray-700">Live Feed</h2>
+                <img src="/live" alt="Live Stream" class="w-full h-auto object-contain" id="videoFeed">
+            </div>
+
+            <div class="flex-1 bg-white rounded-lg p-6 shadow-xl border border-gray-200">
+                <h2 class="text-xl font-semibold mb-4 text-gray-800">Street Light Monitoring</h2>
+
+                <div class="mb-4">
+                    <p class="text-lg font-medium mb-2">Current Street Light Status:</p>
+                    <p id="lightStatus" class="text-2xl font-bold text-purple-600">Loading...</p>
+                </div>
+
+                <h3 class="text-lg font-semibold mb-3 text-gray-700">Set Street Light ROI (Rectangle Coordinates)</h3>
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label for="x1" class="block text-sm font-medium text-gray-700">X1 (Top-Left)</label>
+                        <input type="number" id="x1" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2" placeholder="e.g., 100">
+                    </div>
+                    <div>
+                        <label for="y1" class="block text-sm font-medium text-gray-700">Y1 (Top-Left)</label>
+                        <input type="number" id="y1" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2" placeholder="e.g., 50">
+                    </div>
+                    <div>
+                        <label for="x2" class="block text-sm font-medium text-gray-700">X2 (Bottom-Right)</label>
+                        <input type="number" id="x2" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2" placeholder="e.g., 200">
+                    </div>
+                    <div>
+                        <label for="y2" class="block text-sm font-medium text-gray-700">Y2 (Bottom-Right)</label>
+                        <input type="number" id="y2" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2" placeholder="e.g., 150">
+                    </div>
+                </div>
+                <button id="setRoiButton" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-300 ease-in-out">
+                    Set Street Light ROI
+                </button>
+                <p id="roiMessage" class="mt-3 text-sm text-center text-green-600"></p>
+            </div>
+        </div>
+
+        <div class="mt-8">
+            <h2 class="text-2xl font-bold text-center mb-4 text-blue-700">Recorded Videos</h2>
+            <div id="recordingsList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <p class="text-center text-gray-600">Loading recordings...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const setRoiButton = document.getElementById('setRoiButton');
+            const roiMessage = document.getElementById('roiMessage');
+            const lightStatusElement = document.getElementById('lightStatus');
+            const recordingsListDiv = document.getElementById('recordingsList');
+
+            // Function to fetch and display recordings
+            async function fetchRecordings() {
+                try {
+                    const response = await fetch('/recordings');
+                    const recordings = await response.json();
+                    recordingsListDiv.innerHTML = ''; // Clear previous list
+
+                    if (recordings.length === 0) {
+                        recordingsListDiv.innerHTML = '<p class="text-center text-gray-600 col-span-full">No recordings available.</p>';
+                        return;
+                    }
+
+                    recordings.forEach(recordingPath => {
+                        const fileName = recordingPath.split('/').pop();
+                        const card = `
+                            <div class="bg-gray-50 p-4 rounded-lg shadow-sm border border-gray-200">
+                                <p class="font-semibold text-gray-800 mb-2">${fileName}</p>
+                                <a href="/video?path=${encodeURIComponent(recordingPath)}" target="_blank" class="inline-block bg-green-500 hover:bg-green-600 text-white text-sm font-medium py-1 px-3 rounded-md transition duration-300 ease-in-out">
+                                    View Video
+                                </a>
+                            </div>
+                        `;
+                        recordingsListDiv.innerHTML += card;
+                    });
+                } catch (error) {
+                    console.error('Error fetching recordings:', error);
+                    recordingsListDiv.innerHTML = '<p class="text-center text-red-500 col-span-full">Error loading recordings.</p>';
+                }
+            }
+
+            // Function to fetch and update light status
+            async function fetchLightStatus() {
+                try {
+                    const response = await fetch('/get_light_status');
+                    const data = await response.json();
+                    lightStatusElement.textContent = data.status;
+                    if (data.status === "ON") {
+                        lightStatusElement.classList.remove('text-red-600');
+                        lightStatusElement.classList.add('text-green-600');
+                    } else if (data.status === "OFF") {
+                        lightStatusElement.classList.remove('text-green-600');
+                        lightStatusElement.classList.add('text-red-600');
+                    } else {
+                        lightStatusElement.classList.remove('text-green-600', 'text-red-600');
+                        lightStatusElement.classList.add('text-purple-600');
+                    }
+
+                    // Pre-fill ROI inputs if ROI is already set
+                    if (data.roi) {
+                        document.getElementById('x1').value = data.roi[0];
+                        document.getElementById('y1').value = data.roi[1];
+                        document.getElementById('x2').value = data.roi[2];
+                        document.getElementById('y2').value = data.roi[3];
+                    }
+
+                } catch (error) {
+                    console.error('Error fetching light status:', error);
+                    lightStatusElement.textContent = 'Error fetching status';
+                    lightStatusElement.classList.add('text-red-500');
+                }
+            }
+
+            // Event listener for setting ROI
+            setRoiButton.addEventListener('click', async () => {
+                const x1 = parseInt(document.getElementById('x1').value);
+                const y1 = parseInt(document.getElementById('y1').value);
+                const x2 = parseInt(document.getElementById('x2').value);
+                const y2 = parseInt(document.getElementById('y2').value);
+
+                if (isNaN(x1) || isNaN(y1) || isNaN(x2) || isNaN(y2)) {
+                    roiMessage.textContent = 'Please enter valid numbers for all coordinates.';
+                    roiMessage.classList.remove('text-green-600');
+                    roiMessage.classList.add('text-red-500');
+                    return;
+                }
+
+                try {
+                    const response = await fetch('/set_roi', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ x1, y1, x2, y2 })
+                    });
+                    const result = await response.json();
+                    if (response.ok) {
+                        roiMessage.textContent = result.message;
+                        roiMessage.classList.remove('text-red-500');
+                        roiMessage.classList.add('text-green-600');
+                        fetchLightStatus(); // Update status immediately after setting ROI
+                    } else {
+                        roiMessage.textContent = `Error: ${result.detail || result.message}`;
+                        roiMessage.classList.remove('text-green-600');
+                        roiMessage.classList.add('text-red-500');
+                    }
+                } catch (error) {
+                    console.error('Error setting ROI:', error);
+                    roiMessage.textContent = 'Failed to set ROI. Please try again.';
+                    roiMessage.classList.remove('text-green-600');
+                    roiMessage.classList.add('text-red-500');
+                }
+            });
+
+            // Initial fetch for recordings and light status
+            fetchRecordings();
+            fetchLightStatus();
+
+            // Refresh light status every 5 seconds
+            setInterval(fetchLightStatus, 5000);
+        });
+    </script>
+</body>
+</html>
