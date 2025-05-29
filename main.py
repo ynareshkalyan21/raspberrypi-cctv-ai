@@ -30,7 +30,7 @@ inference_lock = threading.Lock()  # Lock for latest_frame
 # ---------- Street Light Monitoring Globals ---------- #
 # Define the coordinates for the street light ROI (x1, y1, x2, y2)
 # IMPORTANT: Adjust these coordinates to match the location of your street light in the video feed.
-STREET_LIGHT_ROI = (650, 270, 780, 370)   # Example: top-left (500,100), bottom-right (600,200)
+STREET_LIGHT_ROI = (610, 270, 720, 370)    # Example: top-left (500,100), bottom-right (600,200)
 STREET_LIGHT_OFF_AT = None
 street_light_status = "UNKNOWN"  # Current status: "ON", "OFF", "UNKNOWN"
 last_light_intensity = -1  # Stores the last calculated intensity of the ROI
@@ -193,7 +193,7 @@ def monitor_street_light(frame, roi):
         # Draw a red circle if the light is OFF
         if (datetime.now() - STREET_LIGHT_OFF_AT).total_seconds() < 3*60:
             print(f"Street Light OFF for {duration_in_min} minutes")
-            speak(f" {duration_in_min} nimishalu ayyindi")
+            speak(f"{duration_in_min} , nimishalu {duration_in_min},  nimishalu ayyindi")
             speak(f"Corrent Vellipoyi")
             time.sleep(15)
         # draw minute duration_in_min text
