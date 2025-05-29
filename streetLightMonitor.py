@@ -30,15 +30,15 @@ inference_lock = threading.Lock()  # Lock for latest_frame
 # ---------- Street Light Monitoring Globals ---------- #
 # Define the coordinates for the street light ROI (x1, y1, x2, y2)
 # IMPORTANT: Adjust these coordinates to match the location of your street light in the video feed.
-STREET_LIGHT_ROI = (610, 10, 730, 100)  # Example: top-left (500,100), bottom-right (600,200)
+STREET_LIGHT_ROI = (650, 270, 780, 370)   # Example: top-left (500,100), bottom-right (600,200)
 STREET_LIGHT_OFF_AT = None
 street_light_status = "UNKNOWN"  # Current status: "ON", "OFF", "UNKNOWN"
 last_light_intensity = -1  # Stores the last calculated intensity of the ROI
 # Thresholds for detecting ON/OFF state. These will likely need calibration.
 # light_off_threshold: If intensity drops below this, start counting for OFF.
-light_off_threshold = 50  # Example: Adjust based on your light's 'off' brightness
+light_off_threshold = 200  # Example: Adjust based on your light's 'off' brightness
 # light_on_threshold: If intensity rises above this, start counting for ON.
-light_on_threshold = 100  # Example: Adjust based on your light's 'on' brightness
+light_on_threshold = 200  # Example: Adjust based on your light's 'on' brightness
 
 consecutive_off_frames = 0  # Counter for consecutive frames below off_threshold
 consecutive_on_frames = 0  # Counter for consecutive frames above on_threshold
@@ -168,6 +168,7 @@ def monitor_street_light(frame, roi):
             consecutive_off_frames = 0  # Reset OFF counter
             if consecutive_on_frames >= REQUIRED_CONSECUTIVE_FRAMES and street_light_status != "ON":
                 street_light_status = "ON"
+
                 print(f"💡 NOTIFICATION: Street Light turned ON! (Intensity: {current_intensity:.2f})")
                 # Here you would integrate with a mobile notification service
         else:
