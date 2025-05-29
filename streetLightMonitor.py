@@ -10,10 +10,11 @@ import onnxruntime as ort
 from datetime import datetime
 from config import RECORD_DIR, RTSP_URL,FPS,RECORD_INTERVAL,MODEL_PATH
 
-# ---------- CONFIG (Placeholder values if config.py is not used) ---------- #
-# If you have a config.py, ensure these are defined there.
-# Otherwise, adjust these values directly.
+import subprocess
 
+def speak(text, lang='te'):
+    # Use espeak with language code (te for Telugu)
+    subprocess.call(['espeak', '-v', lang, text])
 
 sess_options = ort.SessionOptions()
 sess_options.intra_op_num_threads = 1
@@ -29,8 +30,8 @@ inference_lock = threading.Lock()  # Lock for latest_frame
 # ---------- Street Light Monitoring Globals ---------- #
 # Define the coordinates for the street light ROI (x1, y1, x2, y2)
 # IMPORTANT: Adjust these coordinates to match the location of your street light in the video feed.
-STREET_LIGHT_ROI = (500, 100, 600, 200)  # Example: top-left (500,100), bottom-right (600,200)
-
+STREET_LIGHT_ROI = (610, 10, 730, 100)  # Example: top-left (500,100), bottom-right (600,200)
+STREET_LIGHT_OFF_AT = None
 street_light_status = "UNKNOWN"  # Current status: "ON", "OFF", "UNKNOWN"
 last_light_intensity = -1  # Stores the last calculated intensity of the ROI
 # Thresholds for detecting ON/OFF state. These will likely need calibration.
@@ -112,7 +113,7 @@ def monitor_street_light(frame, roi):
     Monitors the intensity of the specified ROI to determine if the street light is ON or OFF.
     Updates global status variables and draws indicators on the frame.
     """
-    global street_light_status, last_light_intensity, consecutive_off_frames, consecutive_on_frames
+    global street_light_status, last_light_intensity, consecutive_off_frames, consecutive_on_frames, STREET_LIGHT_OFF_AT
 
     x1, y1, x2, y2 = roi
 
@@ -156,7 +157,10 @@ def monitor_street_light(frame, roi):
             consecutive_on_frames = 0  # Reset ON counter
             if consecutive_off_frames >= REQUIRED_CONSECUTIVE_FRAMES and street_light_status != "OFF":
                 street_light_status = "OFF"
+                STREET_LIGHT_OFF_AT = datetime.now()  # Record the time when light turned OFF
                 print(f"🚨 NOTIFICATION: Street Light turned OFF! (Intensity: {current_intensity:.2f})")
+                speak("Corrent Vellipoyindi")
+                time.sleep(60)
                 # Here you would integrate with a mobile notification service
         # Check for light turning ON
         elif current_intensity > light_on_threshold:
@@ -170,6 +174,7 @@ def monitor_street_light(frame, roi):
             # Intensity is in an ambiguous zone or stable, reset counters
             consecutive_off_frames = 0
             consecutive_on_frames = 0
+        # Print current status and intensity
 
         last_light_intensity = current_intensity  # Update last intensity for next comparison
 
@@ -179,6 +184,19 @@ def monitor_street_light(frame, roi):
     # Put text indicating light status and current intensity
     cv2.putText(frame, f"Light: {street_light_status} ({current_intensity:.0f})", (x1, y1 - 20),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)  # Blue text
+    if street_light_status == "OFF":
+        duration_in_min = (datetime.now() - STREET_LIGHT_OFF_AT).total_seconds() / 60
+
+        # Draw a red circle if the light is OFF
+        if (datetime.now() - STREET_LIGHT_OFF_AT).total_seconds() < 10*60:
+            speak(f" {duration_in_min} nimishalu ayyindi")
+            speak(f"Corrent Vellipoyi")
+            time.sleep(10)
+        # draw minute duration_in_min text
+        cv2.putText(frame, f"OFF for: {duration_in_min:.1f} min", (x1, y2 + 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+
     return frame
 
 
@@ -429,8 +447,8 @@ if __name__ == "__main__":
     threading.Thread(target=rtsp_reader, daemon=True).start()
     print("Starting inference loop thread...")
     threading.Thread(target=inference_loop, daemon=True).start()
-    print("Starting recording stream thread...")
-    threading.Thread(target=record_stream, daemon=True).start()
+    # print("Starting recording stream thread...")
+    # threading.Thread(target=record_stream, daemon=True).start()
 
     # Start API
     print("Starting FastAPI application on http://0.0.0.0:8000")
