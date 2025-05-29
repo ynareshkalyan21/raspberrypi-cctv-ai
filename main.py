@@ -149,6 +149,7 @@ def monitor_street_light(frame, roi):
             street_light_status = "ON"
         else:
             street_light_status = "OFF"
+            STREET_LIGHT_OFF_AT = datetime.now()  # Record the time when light turned OFF
         print(f"Initial Street Light Status: {street_light_status} (Intensity: {current_intensity:.2f})")
     else:
         # Check for light turning OFF
