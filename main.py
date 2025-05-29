@@ -155,7 +155,7 @@ def monitor_street_light(frame, roi):
         if current_intensity < light_off_threshold:
             consecutive_off_frames += 1
             consecutive_on_frames = 0  # Reset ON counter
-            if consecutive_off_frames >= REQUIRED_CONSECUTIVE_FRAMES and street_light_status != "OFF":
+            if street_light_status != "OFF":
                 street_light_status = "OFF"
                 STREET_LIGHT_OFF_AT = datetime.now()  # Record the time when light turned OFF
                 print(f"🚨 NOTIFICATION: Street Light turned OFF! (Intensity: {current_intensity:.2f})")
@@ -166,7 +166,7 @@ def monitor_street_light(frame, roi):
         elif current_intensity > light_on_threshold:
             consecutive_on_frames += 1
             consecutive_off_frames = 0  # Reset OFF counter
-            if consecutive_on_frames >= REQUIRED_CONSECUTIVE_FRAMES and street_light_status != "ON":
+            if street_light_status != "ON":
                 street_light_status = "ON"
 
                 print(f"💡 NOTIFICATION: Street Light turned ON! (Intensity: {current_intensity:.2f})")
