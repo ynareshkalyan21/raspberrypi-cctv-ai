@@ -1,4 +1,3 @@
-# Created by yarramsettinaresh GORAKA DIGITAL PRIVATE LIMITED at 29/05/25
 import cv2
 import threading
 import time
@@ -9,358 +8,433 @@ from fastapi.responses import StreamingResponse, HTMLResponse, FileResponse
 import uvicorn
 import onnxruntime as ort
 from datetime import datetime
-from pydantic import BaseModel # Added for FastAPI request body validation
 
-# ---------- CONFIG ---------- #
-# Ensure config.py exists in the same directory and contains these variables
-from config import RECORD_DIR, RTSP_URL, FPS, RECORD_INTERVAL, MODEL_PATH
-print(cv2.getBuildInformation())
+# ---------- CONFIG (Placeholder values if config.py is not used) ---------- #
+# If you have a config.py, ensure these are defined there.
+# Otherwise, adjust these values directly.
+RECORD_DIR = "recordings"
+RTSP_URL = 'rtsp://admin:admin12345@192.168.1.35/Streaming/Channels/101/'  # <<< ADJUST THIS TO YOUR RTSP STREAM URL
+FPS = 20
+RECORD_INTERVAL = 1000  # Frames per recording file (approx 50 seconds at 20 FPS)
+MODEL_PATH = "yolov8n.onnx"  # <<< ENSURE THIS PATH IS CORRECT FOR YOUR ONNX MODEL
 
 sess_options = ort.SessionOptions()
 sess_options.intra_op_num_threads = 1
 sess_options.inter_op_num_threads = 1
-INFERENCE_MODEL_PATH = MODEL_PATH # Path to your YOLOv8 ONNX model
+INFERENCE_MODEL_PATH = MODEL_PATH
 
 # ---------- Globals ---------- #
-latest_raw_frame = None        # Shared raw frame from RTSP reader
-latest_frame = None            # Processed (with inference and ROI drawing) frame
+latest_raw_frame = None  # Shared raw frame from RTSP reader
+latest_frame = None  # Processed (with inference and light detection) frame
 frame_lock = threading.Lock()  # Lock for latest_raw_frame
-inference_lock = threading.Lock() # Lock for latest_frame
+inference_lock = threading.Lock()  # Lock for latest_frame
 
-# Street Light Monitoring Globals
-street_light_roi = None  # Stores (x1, y1, x2, y2) coordinates of the street light ROI
-street_light_state = "UNKNOWN" # Current detected state: "ON", "OFF", or "UNKNOWN"
-previous_brightness = -1.0 # Stores the average brightness of the ROI from the previous frame for comparison
+# ---------- Street Light Monitoring Globals ---------- #
+# Define the coordinates for the street light ROI (x1, y1, x2, y2)
+# IMPORTANT: Adjust these coordinates to match the location of your street light in the video feed.
+STREET_LIGHT_ROI = (500, 100, 600, 200)  # Example: top-left (500,100), bottom-right (600,200)
 
-# Thresholds for state change detection (empirical values, may need tuning)
-BRIGHTNESS_THRESHOLD_ON = 80.0  # If brightness is consistently above this, light is considered ON
-BRIGHTNESS_THRESHOLD_OFF = 50.0 # If brightness is consistently below this, light is considered OFF
-# Note: BRIGHTNESS_THRESHOLD_ON should be > BRIGHTNESS_THRESHOLD_OFF to create hysteresis
-# This prevents rapid flickering between ON/OFF states due to minor brightness fluctuations.
+street_light_status = "UNKNOWN"  # Current status: "ON", "OFF", "UNKNOWN"
+last_light_intensity = -1  # Stores the last calculated intensity of the ROI
+# Thresholds for detecting ON/OFF state. These will likely need calibration.
+# light_off_threshold: If intensity drops below this, start counting for OFF.
+light_off_threshold = 50  # Example: Adjust based on your light's 'off' brightness
+# light_on_threshold: If intensity rises above this, start counting for ON.
+light_on_threshold = 100  # Example: Adjust based on your light's 'on' brightness
 
-DEBOUNCE_FRAMES = 5 # Number of consistent frames required for a state change to be confirmed
-street_light_debounce_count = 0 # Counter for consistent state changes
-last_notified_state = "UNKNOWN" # Tracks the last state for which a notification was sent, to avoid spamming
+consecutive_off_frames = 0  # Counter for consecutive frames below off_threshold
+consecutive_on_frames = 0  # Counter for consecutive frames above on_threshold
+REQUIRED_CONSECUTIVE_FRAMES = 5  # Number of consecutive frames needed to confirm a state change
 
 # ---------- Model Setup ---------- #
 try:
     session = ort.InferenceSession(INFERENCE_MODEL_PATH, providers=["CPUExecutionProvider"], sess_options=sess_options)
     input_name = session.get_inputs()[0].name
-    print(f"✅ ONNX model loaded from: {INFERENCE_MODEL_PATH}")
+    print(f"ONNX model loaded successfully from {INFERENCE_MODEL_PATH}")
 except Exception as e:
-    print(f"❌ Error loading ONNX model from {INFERENCE_MODEL_PATH}: {e}")
-    print("Please ensure 'yolov8n.onnx' is in the same directory or MODEL_PATH is correct in config.py.")
-    # Exit or handle gracefully if model is essential
-    exit()
+    print(f"Error loading ONNX model: {e}")
+    print("Please ensure MODEL_PATH is correct and the ONNX model is valid.")
+    session = None  # Set session to None to handle cases where model loading fails
+
 
 # ---------- YOLOv8 Helper Functions ---------- #
 def preprocess(image):
-    """Preprocesses the image for YOLOv8 inference."""
+    """
+    Preprocesses the image for YOLOv8 inference.
+    Resizes, converts color, transposes, normalizes, and adds batch dimension.
+    """
     img = cv2.resize(image, (640, 640))
-    img = img[..., ::-1].transpose(2, 0, 1).astype(np.float32) # BGR to RGB, HWC to CHW
-    img /= 255.0 # Normalize to [0, 1]
-    return np.expand_dims(img, axis=0) # Add batch dimension
+    img = img[..., ::-1].transpose(2, 0, 1).astype(np.float32)  # BGR to RGB, HWC to CHW
+    img /= 255.0  # Normalize to [0, 1]
+    return np.expand_dims(img, axis=0)  # Add batch dimension
+
 
 def postprocess(outputs, frame):
-    """Postprocesses YOLOv8 outputs to get bounding boxes, scores, and class IDs."""
-    pred = outputs[0][0] # Assuming output format is (1, N, 84) for N detections
+    """
+    Postprocesses the YOLOv8 model outputs to extract bounding boxes, scores, and class IDs.
+    Applies non-max suppression if needed (though not explicitly implemented here,
+    YOLOv8 models often have NMS built-in or applied in a separate step).
+    """
+    pred = outputs[0][0]  # Assuming output format is (1, N, 6) where N is num_detections
     boxes, scores, class_ids = [], [], []
     h, w, _ = frame.shape
     for det in pred:
-        conf = det[4] # Confidence score
-        if conf < 0.5: # Confidence threshold
+        conf = det[4]  # Confidence score for the object
+        if conf < 0.5:  # Confidence threshold
             continue
-        class_id = np.argmax(det[5:]) # Class ID (assuming 80 classes for COCO)
-        cx, cy, bw, bh = det[:4] # Center x, center y, box width, box height
+        class_id = np.argmax(det[5:])  # Class ID is the index of the max probability
+        cx, cy, bw, bh = det[:4]  # Center_x, Center_y, Box_width, Box_height
+
         # Convert normalized coordinates to pixel coordinates
         x1 = int((cx - bw / 2) * w / 640)
         y1 = int((cy - bh / 2) * h / 640)
         x2 = int((cx + bw / 2) * w / 640)
         y2 = int((cy + bh / 2) * h / 640)
+
         boxes.append([x1, y1, x2, y2])
         scores.append(conf)
         class_ids.append(class_id)
     return boxes, scores, class_ids
 
+
 def draw_boxes(image, boxes, scores, class_ids):
-    """Draws bounding boxes, labels, and scores on the image."""
+    """
+    Draws bounding boxes, scores, and class labels on the image.
+    """
     for box, score, class_id in zip(boxes, scores, class_ids):
         x1, y1, x2, y2 = box
         label = f"Class {class_id}: {score:.2f}"
-        cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2) # Green rectangle
-        cv2.putText(image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2) # Green text
+        cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)  # Green rectangle
+        cv2.putText(image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
     return image
+
+
+# ---------- Street Light Monitoring Function ---------- #
+def monitor_street_light(frame, roi):
+    """
+    Monitors the intensity of the specified ROI to determine if the street light is ON or OFF.
+    Updates global status variables and draws indicators on the frame.
+    """
+    global street_light_status, last_light_intensity, consecutive_off_frames, consecutive_on_frames
+
+    x1, y1, x2, y2 = roi
+
+    # Ensure ROI is within frame boundaries
+    x1 = max(0, x1)
+    y1 = max(0, y1)
+    x2 = min(frame.shape[1], x2)
+    y2 = min(frame.shape[0], y2)
+
+    # Check for invalid ROI dimensions
+    if x2 <= x1 or y2 <= y1:
+        print("Invalid Street Light ROI coordinates. Please check STREET_LIGHT_ROI.")
+        # Draw a red rectangle to indicate invalid ROI
+        cv2.rectangle(frame, (roi[0], roi[1]), (roi[2], roi[3]), (0, 0, 255), 2)
+        cv2.putText(frame, "INVALID ROI", (roi[0], roi[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        return frame
+
+    roi_frame = frame[y1:y2, x1:x2]
+
+    # Check if ROI is empty (e.g., due to out-of-bounds coordinates after clamping)
+    if roi_frame.size == 0:
+        print("Street Light ROI is empty after clamping. Check coordinates.")
+        return frame
+
+    # Convert ROI to grayscale and calculate average intensity
+    gray_roi = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2GRAY)
+    current_intensity = np.mean(gray_roi)
+
+    # State machine for light detection
+    if last_light_intensity == -1:  # Initial state
+        last_light_intensity = current_intensity
+        if current_intensity > light_on_threshold:
+            street_light_status = "ON"
+        else:
+            street_light_status = "OFF"
+        print(f"Initial Street Light Status: {street_light_status} (Intensity: {current_intensity:.2f})")
+    else:
+        # Check for light turning OFF
+        if current_intensity < light_off_threshold:
+            consecutive_off_frames += 1
+            consecutive_on_frames = 0  # Reset ON counter
+            if consecutive_off_frames >= REQUIRED_CONSECUTIVE_FRAMES and street_light_status != "OFF":
+                street_light_status = "OFF"
+                print(f"🚨 NOTIFICATION: Street Light turned OFF! (Intensity: {current_intensity:.2f})")
+                # Here you would integrate with a mobile notification service
+        # Check for light turning ON
+        elif current_intensity > light_on_threshold:
+            consecutive_on_frames += 1
+            consecutive_off_frames = 0  # Reset OFF counter
+            if consecutive_on_frames >= REQUIRED_CONSECUTIVE_FRAMES and street_light_status != "ON":
+                street_light_status = "ON"
+                print(f"💡 NOTIFICATION: Street Light turned ON! (Intensity: {current_intensity:.2f})")
+                # Here you would integrate with a mobile notification service
+        else:
+            # Intensity is in an ambiguous zone or stable, reset counters
+            consecutive_off_frames = 0
+            consecutive_on_frames = 0
+
+        last_light_intensity = current_intensity  # Update last intensity for next comparison
+
+    # Draw ROI and status on frame
+    # Draw the ROI rectangle in blue
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+    # Put text indicating light status and current intensity
+    cv2.putText(frame, f"Light: {street_light_status} ({current_intensity:.0f})", (x1, y1 - 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)  # Blue text
+    return frame
+
 
 # ---------- Thread 1: RTSP Reader ---------- #
 def rtsp_reader():
-    """Reads frames from the RTSP stream (or local video file) and updates latest_raw_frame."""
+    """
+    Reads frames from the RTSP stream and updates the global latest_raw_frame.
+    """
     global latest_raw_frame
-    # Using a local video file for demonstration. Replace with RTSP_URL for live stream.
-    # cap = cv2.VideoCapture(RTSP_URL, cv2.CAP_FFMPEG)
     cap = cv2.VideoCapture(RTSP_URL)
-
     if not cap.isOpened():
-        print(f"❌ Unable to open video source: {RTSP_URL} or local file.")
-        return # Exit thread if cannot open source
+        print(f"Failed to open RTSP stream at {RTSP_URL}. Retrying in 5 seconds...")
+        time.sleep(5)
+        # Attempt to reconnect if failed
+        cap = cv2.VideoCapture(RTSP_URL)
+        if not cap.isOpened():
+            print(f"Still failed to open RTSP stream. Exiting RTSP reader thread.")
+            return
 
-    print("✅ Successfully opened video source.")
-    print(f"Frame width: {cap.get(cv2.CAP_PROP_FRAME_WIDTH)}")
-    print(f"Frame height: {cap.get(cv2.CAP_PROP_FRAME_HEIGHT)}")
-    print(f"FPS: {cap.get(cv2.CAP_PROP_FPS)}")
-    print(f"Frame count: {cap.get(cv2.CAP_PROP_FRAME_COUNT)}")
-
+    cc = 0
     while True:
         ret, frame_raw = cap.read()
         if not ret:
-            print("❌ Failed to read frame from video stream. Attempting to reconnect...")
+            print("❌ Failed to read frame from RTSP stream. Attempting to reconnect...")
             cap.release()
-            # Re-initialize capture in case of stream drop
-            # cap = cv2.VideoCapture(RTSP_URL, cv2.CAP_FFMPEG)
-            cap = cv2.VideoCapture("/Users/yarramsettinaresh/Downloads/tractor_basta.mp4", cv2.CAP_FFMPEG)
+            time.sleep(2)  # Wait before attempting to reconnect
+            cap = cv2.VideoCapture(RTSP_URL)
             if not cap.isOpened():
-                print("❌ Reconnection failed. Retrying in 5 seconds...")
-                time.sleep(5)
-                continue
-            else:
-                print("✅ Reconnection successful.")
-                continue
-
-        with frame_lock: # Protect shared resource
-            latest_raw_frame = frame_raw.copy()
-        time.sleep(1.0 / FPS) # Control frame reading rate
-
-# ---------- Thread 2: Inference Loop and Street Light Detection ---------- #
-def inference_loop():
-    """Performs object detection inference and street light monitoring."""
-    global latest_frame, street_light_state, previous_brightness, street_light_debounce_count, last_notified_state
-
-    while True:
-        frame_to_process = None
-        with frame_lock:
-            if latest_raw_frame is not None:
-                frame_to_process = latest_raw_frame.copy()
-
-        if frame_to_process is None:
-            # print(f"** No raw frame available for inference, skipping...**")
-            time.sleep(0.1) # Wait a bit before checking again
+                print("Reconnection failed. Will retry...")
+                time.sleep(5)  # Longer wait if reconnection fails
             continue
 
-        # --- Object Detection Inference ---
-        start_time = time.time()
-        inp = preprocess(frame_to_process)
-        outputs = session.run(None, {input_name: inp})
-        boxes, scores, class_ids = postprocess(outputs, frame_to_process)
-        frame_processed = draw_boxes(frame_to_process, boxes, scores, class_ids)
-        duration = time.time() - start_time
-        cv2.putText(frame_processed, f"Inference Time: {duration:.2f}s", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        with frame_lock:  # Protect access to latest_raw_frame
+            if latest_raw_frame is None:
+                print("Setting first raw frame.")
+            latest_raw_frame = frame_raw.copy()
+            cc += 1
+            # print(f"RTSP Reader: {cc} frames read") # Uncomment for debugging frame rate
 
-        # --- Street Light Monitoring ---
-        if street_light_roi is not None:
-            x1, y1, x2, y2 = street_light_roi
-            # Ensure coordinates are within frame bounds
-            h_frame, w_frame, _ = frame_processed.shape
-            x1 = max(0, x1)
-            y1 = max(0, y1)
-            x2 = min(w_frame, x2)
-            y2 = min(h_frame, y2)
 
-            if x2 > x1 and y2 > y1: # Valid ROI (width and height > 0)
-                roi = frame_processed[y1:y2, x1:x2]
-                gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-                current_brightness = np.mean(gray_roi)
-
-                # Draw ROI rectangle and brightness on frame
-                cv2.rectangle(frame_processed, (x1, y1), (x2, y2), (255, 0, 0), 2) # Blue rectangle for ROI
-                cv2.putText(frame_processed, f"ROI Brightness: {current_brightness:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-
-                new_state = street_light_state # Assume current state unless a change is confirmed
-
-                if previous_brightness != -1.0: # Only compare after first valid brightness reading
-                    # Check for transition from OFF/UNKNOWN to ON
-                    if current_brightness > BRIGHTNESS_THRESHOLD_ON and street_light_state != "ON":
-                        if street_light_debounce_count >= DEBOUNCE_FRAMES:
-                            new_state = "ON"
-                            street_light_debounce_count = 0
-                        else:
-                            street_light_debounce_count += 1
-                    # Check for transition from ON/UNKNOWN to OFF
-                    elif current_brightness < BRIGHTNESS_THRESHOLD_OFF and street_light_state != "OFF":
-                        if street_light_debounce_count >= DEBOUNCE_FRAMES:
-                            new_state = "OFF"
-                            street_light_debounce_count = 0
-                        else:
-                            street_light_debounce_count += 1
-                    else:
-                        # If brightness is within the hysteresis range or consistent with current state, reset debounce
-                        street_light_debounce_count = 0
-
-                # Update state if a confirmed change occurred
-                if new_state != street_light_state:
-                    street_light_state = new_state
-                    if street_light_state != last_notified_state: # Only notify if state actually changed from last notification
-                        notification_message = f"Street Light is now: {street_light_state}!"
-                        print(f"NOTIFICATION: {notification_message}")
-                        # Simulate mobile notification by adding text to frame
-                        cv2.putText(frame_processed, notification_message, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2) # Red text for notification
-                        last_notified_state = street_light_state
-                else:
-                    # If state hasn't changed, but ROI is defined, just update the text with current state
-                    if street_light_state != "UNKNOWN":
-                         cv2.putText(frame_processed, f"Light Status: {street_light_state}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2) # Yellow text for status
-
-                previous_brightness = current_brightness # Store current brightness for next comparison
-            else:
-                cv2.putText(frame_processed, "Invalid ROI coordinates", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        else:
-            cv2.putText(frame_processed, "Set ROI for light monitoring", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2) # Cyan text
-
-        with inference_lock: # Protect shared resource
-            latest_frame = frame_processed.copy()
-        time.sleep(1.0 / FPS) # Control inference rate
-
-# ---------- Thread 3: Recording (Optional, currently commented out in main) ---------- #
-def record_stream():
-    """Records the processed video stream to files, rotating periodically."""
+# ---------- Thread 2: Inference Loop ---------- #
+def inference_loop():
+    """
+    Performs object detection and street light monitoring on frames,
+    then updates the global latest_frame for streaming and recording.
+    """
     global latest_frame
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v') # Codec for MP4
+    ic = 0
+    while True:
+        frame_to_process = None
+        with frame_lock:  # Acquire lock to read latest_raw_frame safely
+            if latest_raw_frame is not None:
+                frame_to_process = latest_raw_frame.copy()
+            else:
+                # print(f"** No raw frame available for inference, skipping...**")
+                time.sleep(0.1)  # Small sleep to avoid busy-waiting
+                continue
+
+        if frame_to_process is None:
+            continue
+
+        start_time = time.time()
+
+        # Perform YOLOv8 inference if model is loaded
+        if session:
+            inp = preprocess(frame_to_process)
+            outputs = session.run(None, {input_name: inp})
+            boxes, scores, class_ids = postprocess(outputs, frame_to_process)
+            frame_to_process = draw_boxes(frame_to_process, boxes, scores, class_ids)
+        else:
+            cv2.putText(frame_to_process, "Model not loaded!", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
+        # --- New: Monitor street light ---
+        frame_to_process = monitor_street_light(frame_to_process, STREET_LIGHT_ROI)
+        # ---------------------------------
+
+        duration = time.time() - start_time
+        # Add inference duration to frame
+        cv2.putText(frame_to_process, f"Inference Time: {duration:.2f}s", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                    (0, 255, 0), 2)
+        ic += 1
+        # print(f"ic:{ic} Inference Time: {duration:.2f}s") # Uncomment for debugging
+
+        with inference_lock:  # Protect access to latest_frame
+            latest_frame = frame_to_process.copy()
+
+
+# ---------- Thread 3: Recording ---------- #
+def record_stream():
+    """
+    Records the processed video stream to MP4 files, rotating files based on RECORD_INTERVAL.
+    """
+    global latest_frame
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Codec for MP4
     out = None
-    folder_path = None
+    out_path = None
     frame_count = 0
-    last_rotation_time = time.time()
+
+    os.makedirs(RECORD_DIR, exist_ok=True)  # Ensure recording directory exists
 
     while True:
         frame_to_record = None
-        with inference_lock: # Get the latest processed frame
+        with inference_lock:  # Acquire lock to read latest_frame safely
             if latest_frame is not None:
                 frame_to_record = latest_frame.copy()
+            else:
+                time.sleep(0.1)  # Small sleep to avoid busy-waiting
+                continue
 
         if frame_to_record is None:
-            time.sleep(0.1)
             continue
 
-        current_time = time.time()
-        # Rotate video file based on RECORD_INTERVAL or frame count
-        if out is None or (current_time - last_rotation_time) >= RECORD_INTERVAL or frame_count >= (FPS * RECORD_INTERVAL):
+        # Initialize or rotate video file
+        if out is None or frame_count >= RECORD_INTERVAL:
             if out is not None:
                 print(f"** Recording stopped, saving file: {out_path}")
-                out.release() # Release the previous video writer
+                out.release()  # Release the previous video writer
 
+            # Create new folder for current date if it doesn't exist
             folder_path = os.path.join(RECORD_DIR, datetime.now().strftime('%Y-%m-%d'))
-            os.makedirs(folder_path, exist_ok=True) # Create daily folder if it doesn't exist
+            os.makedirs(folder_path, exist_ok=True)
+
+            # Generate new file name with timestamp
             file_name = f"{datetime.now().strftime('%H-%M-%S')}.mp4"
             out_path = os.path.join(folder_path, file_name)
 
             # Initialize new video writer
-            # Use frame_to_record.shape[1] for width and frame_to_record.shape[0] for height
-            out = cv2.VideoWriter(out_path, fourcc, FPS, (frame_to_record.shape[1], frame_to_record.shape[0]))
-            if not out.isOpened():
-                print(f"❌ Error: Could not open video writer for {out_path}")
-                out = None # Reset out to prevent further write attempts to a bad file
-                time.sleep(5) # Wait before retrying
-                continue
-            print(f"Recording to {out_path}")
-            last_rotation_time = current_time
-            frame_count = 0
+            # Ensure frame_to_record has valid dimensions before initializing VideoWriter
+            if frame_to_record.shape[0] > 0 and frame_to_record.shape[1] > 0:
+                out = cv2.VideoWriter(out_path, fourcc, FPS, (frame_to_record.shape[1], frame_to_record.shape[0]))
+                print(f"Recording to {out_path}")
+                frame_count = 0  # Reset frame count for the new file
+            else:
+                print("Warning: Frame has invalid dimensions for video writer. Skipping recording initialization.")
+                out = None  # Prevent further write attempts until a valid frame comes
+                time.sleep(1)  # Wait before retrying
 
-        out.write(frame_to_record)
-        frame_count += 1
-        time.sleep(1.0 / FPS) # Control recording rate
+        if out is not None:
+            out.write(frame_to_record)
+            frame_count += 1
+
+        time.sleep(1.0 / FPS)  # Control recording frame rate
+
 
 # ---------- API ---------- #
 app = FastAPI()
 
-# Pydantic model for validating incoming ROI coordinates
-class ROICoordinates(BaseModel):
-    x1: int
-    y1: int
-    x2: int
-    y2: int
 
 def generate_frames():
-    """Generator function for streaming video frames via HTTP."""
+    """
+    Generator function to yield JPEG frames for the MJPEG streaming endpoint.
+    """
+    ccc = 0
     while True:
-        frame_to_stream = None
-        with inference_lock:
+        frame_to_send = None
+        with inference_lock:  # Acquire lock to read latest_frame safely
             if latest_frame is not None:
-                frame_to_stream = latest_frame.copy()
+                frame_to_send = latest_frame.copy()
+            else:
+                # print("/live::generate_frames::No frame available")
+                time.sleep(0.1)  # Small sleep to avoid busy-waiting
+                continue
 
-        if frame_to_stream is None:
-            # print("/live::generate_frames::No frame available") # Too verbose, removed
-            time.sleep(0.1) # Wait a bit before checking again
+        if frame_to_send is None:
             continue
 
-        ret, jpeg = cv2.imencode('.jpg', frame_to_stream)
+        ret, jpeg = cv2.imencode('.jpg', frame_to_send)
         if not ret:
             print("/live::generate_frames::Failed to encode frame")
             continue
-        # print(f"/stream::generate_frames::Frame sent") # Too verbose, removed
+        ccc += 1
+        # print(f"/stream::generate_frames::{ccc} frames sent") # Uncomment for debugging
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
 
-@app.get("/", response_class=HTMLResponse)
-async def index():
-    """Serves the main HTML page."""
-    # Ensure 'templates' directory exists and 'index.html' is inside it
-    try:
-        with open("templates/streetLight.html", "r") as f:
-            return HTMLResponse(content=f.read())
-    except FileNotFoundError:
-        return HTMLResponse(content="<h1>Error: index.html not found in 'templates' directory.</h1>", status_code=404)
 
-@app.get("/live")
-async def video_feed():
-    """Streams the live video feed with inference results."""
-    return StreamingResponse(generate_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
-
-@app.post("/set_roi")
-async def set_roi(coords: ROICoordinates):
-    """API endpoint to set the Region of Interest (ROI) for street light monitoring."""
-    global street_light_roi, street_light_state, previous_brightness, street_light_debounce_count, last_notified_state
-    street_light_roi = (coords.x1, coords.y1, coords.x2, coords.y2)
-    # Reset state and brightness when ROI is set/changed to re-evaluate
-    street_light_state = "UNKNOWN"
-    previous_brightness = -1.0
-    street_light_debounce_count = 0
-    last_notified_state = "UNKNOWN"
-    print(f"Street light ROI set to: {street_light_roi}")
-    return {"message": "ROI coordinates updated successfully", "roi": street_light_roi}
-
-@app.get("/get_light_status")
-async def get_light_status():
-    """API endpoint to get the current street light status and its ROI."""
-    global street_light_state, street_light_roi
-    return {"status": street_light_state, "roi": street_light_roi}
-
-@app.get("/recordings")
-async def list_recordings_api():
-    """API endpoint to list available video recordings."""
+def list_recordings():
+    """
+    Lists all recorded MP4 files.
+    """
     all_files = []
-    # os.walk traverses directory tree
+    # os.walk traverses directories recursively
     for root, _, files in os.walk(RECORD_DIR):
         for f in files:
             if f.endswith('.mp4'):
-                # Store full path for FileResponse
+                # Append full path to the list
                 all_files.append(os.path.join(root, f))
-    return sorted(all_files) # Return sorted list for consistent order
+    return sorted(all_files, reverse=True)  # Sort by most recent first
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    """
+    Serves the main HTML page for the video stream and recordings.
+    """
+    # Read the index.html file
+    try:
+        with open("templates/index.html", "r") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    except FileNotFoundError:
+        return HTMLResponse(content="<h1>Error: templates/index.html not found!</h1>", status_code=404)
+
+
+@app.get("/live")
+async def video_feed():
+    """
+    Endpoint for MJPEG streaming of the live video feed.
+    """
+    return StreamingResponse(generate_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.get("/recordings_list")
+def recordings_list():
+    """
+    Endpoint to list all available video recordings.
+    """
+    return list_recordings()
+
 
 @app.get("/video")
-async def get_video_file(path: str):
-    """API endpoint to serve a specific recorded video file."""
-    if os.path.exists(path) and path.startswith(RECORD_DIR):
-        return FileResponse(path, media_type="video/mp4")
-    return HTMLResponse(content="<h1>Error: Video not found or unauthorized path.</h1>", status_code=404)
+def video(path: str):
+    """
+    Endpoint to serve a specific video file.
+    """
+    # Basic security check to prevent directory traversal
+    if not os.path.exists(path) or not path.startswith(RECORD_DIR):
+        return {"error": "Invalid video path"}, 400
+    return FileResponse(path)
 
-# ---------- Main Execution Block ---------- #
+
+@app.get("/street_light_status")
+def get_street_light_status():
+    """
+    New endpoint to get the current status of the street light.
+    """
+    global street_light_status
+    return {"status": street_light_status}
+
+
+# ---------- Main ---------- #
 if __name__ == "__main__":
-    # Create recordings directory if it doesn't exist
+    # Create the recordings directory if it doesn't exist
     os.makedirs(RECORD_DIR, exist_ok=True)
-    os.makedirs("templates", exist_ok=True) # Ensure templates directory exists
 
-    # Start threads for video processing
+    # Start threads
+    print("Starting RTSP reader thread...")
     threading.Thread(target=rtsp_reader, daemon=True).start()
+    print("Starting inference loop thread...")
     threading.Thread(target=inference_loop, daemon=True).start()
-    # Uncomment the line below to enable video recording
-    # threading.Thread(target=record_stream, daemon=True).start()
+    print("Starting recording stream thread...")
+    threading.Thread(target=record_stream, daemon=True).start()
 
-    # Start FastAPI application
+    # Start API
+    print("Starting FastAPI application on http://0.0.0.0:8000")
     uvicorn.run(app, host="0.0.0.0", port=8000)
