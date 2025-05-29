@@ -8,15 +8,12 @@ from fastapi.responses import StreamingResponse, HTMLResponse, FileResponse
 import uvicorn
 import onnxruntime as ort
 from datetime import datetime
+from config import RECORD_DIR, RTSP_URL,FPS,RECORD_INTERVAL,MODEL_PATH
 
 # ---------- CONFIG (Placeholder values if config.py is not used) ---------- #
 # If you have a config.py, ensure these are defined there.
 # Otherwise, adjust these values directly.
-RECORD_DIR = "recordings"
-RTSP_URL = 'rtsp://admin:admin12345@192.168.1.35/Streaming/Channels/101/'  # <<< ADJUST THIS TO YOUR RTSP STREAM URL
-FPS = 20
-RECORD_INTERVAL = 1000  # Frames per recording file (approx 50 seconds at 20 FPS)
-MODEL_PATH = "yolov8n.onnx"  # <<< ENSURE THIS PATH IS CORRECT FOR YOUR ONNX MODEL
+
 
 sess_options = ort.SessionOptions()
 sess_options.intra_op_num_threads = 1
