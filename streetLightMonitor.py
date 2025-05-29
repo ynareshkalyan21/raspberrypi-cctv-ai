@@ -97,7 +97,7 @@ def rtsp_reader():
     global latest_raw_frame
     # Using a local video file for demonstration. Replace with RTSP_URL for live stream.
     # cap = cv2.VideoCapture(RTSP_URL, cv2.CAP_FFMPEG)
-    cap = cv2.VideoCapture("/Users/yarramsettinaresh/Downloads/tractor_basta.mp4", cv2.CAP_FFMPEG)
+    cap = cv2.VideoCapture(RTSP_URL)
 
     if not cap.isOpened():
         print(f"❌ Unable to open video source: {RTSP_URL} or local file.")
