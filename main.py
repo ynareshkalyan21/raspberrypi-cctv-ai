@@ -36,9 +36,9 @@ street_light_status = "UNKNOWN"  # Current status: "ON", "OFF", "UNKNOWN"
 last_light_intensity = -1  # Stores the last calculated intensity of the ROI
 # Thresholds for detecting ON/OFF state. These will likely need calibration.
 # light_off_threshold: If intensity drops below this, start counting for OFF.
-light_off_threshold = 200  # Example: Adjust based on your light's 'off' brightness
+light_off_threshold = 170  # Example: Adjust based on your light's 'off' brightness
 # light_on_threshold: If intensity rises above this, start counting for ON.
-light_on_threshold = 200  # Example: Adjust based on your light's 'on' brightness
+light_on_threshold = 170  # Example: Adjust based on your light's 'on' brightness
 
 consecutive_off_frames = 0  # Counter for consecutive frames below off_threshold
 consecutive_on_frames = 0  # Counter for consecutive frames above on_threshold
