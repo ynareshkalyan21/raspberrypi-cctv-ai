@@ -448,6 +448,7 @@ if __name__ == "__main__":
 
     # Start threads
     print("Starting RTSP reader thread...")
+    speak("started")
     threading.Thread(target=rtsp_reader, daemon=True).start()
     print("Starting inference loop thread...")
     threading.Thread(target=inference_loop, daemon=True).start()
