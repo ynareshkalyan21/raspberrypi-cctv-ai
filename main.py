@@ -14,7 +14,17 @@ import subprocess
 
 def speak(text, lang='te'):
     # Use espeak with language code (te for Telugu)
-    subprocess.call(['espeak', '-v', lang, text])
+    # time_range 7pm to 5am
+    # This is a placeholder for the actual time range logic.
+    # You can implement your own logic to determine the time range
+    # For example, you can use datetime to check the current time
+    # Here we assume the time range is from 7 PM to 5 AM
+    # Adjust the time range as needed
+    current_time = datetime.now().time()
+    if current_time >= datetime.strptime("19:00", "%H:%M").time() or current_time <= datetime.strptime("05:00", "%H:%M").time():
+        # If current time is within the range, speak the text
+        subprocess.call(['espeak', '-v', lang, text])
+
 
 sess_options = ort.SessionOptions()
 sess_options.intra_op_num_threads = 1
